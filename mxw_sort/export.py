@@ -1,18 +1,18 @@
-from pathlib import Path
 import json
+from pathlib import Path
+
 import numpy as np
 import spikeinterface.core as sc
 
-# Export constants
 DEFAULT_DTYPE = "int16"
-DEFAULT_CHUNK_DURATION = "1s" # Saves my PC. Can be increased for HPCs/devices with lots of RAM.
+DEFAULT_CHUNK_DURATION = "1s"
 
-# Writes spikeinterface recording object to binary format
+
 def write_binary(
     rec,
     bin_path: Path,
     dtype: str = DEFAULT_DTYPE,
-    chunk_duration: str = DEFAULT_CHUNK_DURATION
+    chunk_duration: str = DEFAULT_CHUNK_DURATION,
 ):
     sc.write_binary_recording(
         rec,
@@ -23,7 +23,7 @@ def write_binary(
         progress_bar=True,
     )
 
-# Writes maxwell probe/electrode layout to a JSON for Kilosort
+
 def write_probe_json(xy: np.ndarray, probe_path: Path):
     xy = np.asarray(xy)
     n_chan = int(xy.shape[0])
@@ -35,6 +35,7 @@ def write_probe_json(xy: np.ndarray, probe_path: Path):
         "n_chan": n_chan,
     }
     probe_path.write_text(json.dumps(probe, indent=2))
+
 
 def write_meta_json(meta: dict, meta_path: Path):
     meta_path.write_text(json.dumps(meta, indent=2))

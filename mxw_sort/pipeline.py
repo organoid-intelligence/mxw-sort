@@ -1,18 +1,20 @@
-from pathlib import Path
 import time
+from pathlib import Path
+
 import numpy as np
+import spikeinterface.preprocessing as spre
 
 from .config import PipelineConfig
-from .io_maxwell import read_maxwell, get_available_wells, get_well_duration_s
-from .preprocess import unsigned_to_signed, slice_seconds, bandpass_to_frac_nyq
-from .export import write_binary, write_probe_json, write_meta_json
+from .export import write_binary, write_meta_json, write_probe_json
+from .io_maxwell import get_available_wells, get_well_duration_s, read_maxwell
 from .ks4 import run_ks4
+from .preprocess import bandpass_to_frac_nyq, slice_seconds
 from .qc import write_qc
 
 
 def _ks4_done(ks_dir: Path) -> bool:
-    # dummy way to check if ks4 has completed its run
     return (ks_dir / "spike_times.npy").exists() and (ks_dir / "spike_clusters.npy").exists()
+
 
 def process_one_well(
     h5_path: str,
@@ -22,29 +24,7 @@ def process_one_well(
     skip_existing: bool = True,
     dry_run: bool = False,
 ):
-    """
-    Modular single-well processing pipeline, wells run serially.
-
-    But what are we looking at?
-
-    Pipeline stages:
-        1. Read the Maxwell recording and apply preprocessing
-        2. Export to binary format for speed/ease of reading by KS. Alongside it, export the recording probe geometry
-        3. Call/run Kilosort4
-        4. Generate a handful of computationally cheap QC plots. KS4 will also create its own QC plots. (Does that make this step redundant??)
-
-    Args:
-        h5_path: Path to Maxwell .raw.h5 file
-        out_root: Root dir for outputs 
-        cfg: Pipeline configuration
-        well_idx: Well index (0-5)
-        skip_existing: Skip if KS4 outputs already exist
-        dry_run: Print only actions, without executing
-            
-    Raises:
-        FileNotFoundError: If the h5_path doesn't exist
-        ValueError: If well_idx is invalid
-    """
+    """Single-well pipeline: read -> preprocess -> export binary -> KS4 -> QC."""
     stream = f"well{well_idx:03d}"
 
     well_dir = out_root / stream
@@ -81,16 +61,13 @@ def process_one_well(
     ks_dir.mkdir(parents=True, exist_ok=True)
     qc_dir.mkdir(parents=True, exist_ok=True)
 
-    # Read h5, run preprocessers
     rec = read_maxwell(h5_path, stream)
-    rec = unsigned_to_signed(rec)
+    rec = spre.unsigned_to_signed(rec)
     rec = slice_seconds(rec, cfg.start_s, cfg.dur_s)
     rec = bandpass_to_frac_nyq(rec, cfg.bp_min_hz, cfg.bp_max_frac_nyq)
 
-    # Get sampling frequency from the actual data
     fs_hz = rec.get_sampling_frequency()
 
-    # Export binary, export channel xy's
     write_binary(rec, bin_path)
     xy = rec.get_channel_locations()
     np.save(xy_path, xy)
@@ -108,7 +85,6 @@ def process_one_well(
     }
     write_meta_json(meta, meta_path)
 
-    # Run KS4 (AVOID double highpass filtering, triple check preprocess, export, and config)
     run_ks4(
         bin_file=bin_path,
         probe_path=probe_path,
@@ -119,15 +95,12 @@ def process_one_well(
         highpass_cutoff_hz=cfg.ks4_highpass_cutoff_hz,
     )
 
-    # QC
-    dur_s_processed = cfg.dur_s if cfg.dur_s is not None else None # redundant?
-    write_qc(ks_dir=ks_dir, qc_dir=qc_dir, fs_hz=float(fs_hz), dur_s_processed=dur_s_processed)
+    write_qc(ks_dir=ks_dir, qc_dir=qc_dir, fs_hz=float(fs_hz), dur_s_processed=cfg.dur_s)
 
     elapsed = time.time() - t0
     print(f"[DONE] {stream} in {elapsed:.1f}s")
 
-# Process multiple wells from a Maxwell H5 File
-# Multiple wells could be run in parallel in the future. ProcessPoolExecutor would be added around here.
+
 def process_h5(
     h5_path: str,
     out_root: Path,
@@ -137,10 +110,8 @@ def process_h5(
     dry_run: bool = False,
     only_well: int | None = None,
 ):
-    # Handle only_well override
     if only_well is not None:
         wells = (only_well,)
-    # Auto-detect wells if not specified
     elif wells is None:
         wells = get_available_wells(h5_path)
         print(f"Auto-detected {len(wells)} wells: {wells}")
@@ -156,8 +127,6 @@ def process_h5(
         )
 
 
-# Recursively finds all .h5 files under a root directory and processes each one
-# Output directories mirror the input directory structure
 def process_directory(
     root_dir: Path,
     out_root: Path,
@@ -197,8 +166,6 @@ def process_directory(
         )
 
 
-# Flat directory mode: all h5 files are in one folder with unique names.
-# Output folders are named after each file's stem (e.g. "recording_001.raw.h5" -> "recording_001.raw/")
 def process_directory_flat(
     root_dir: Path,
     out_root: Path,
@@ -208,6 +175,7 @@ def process_directory_flat(
     dry_run: bool = False,
     only_well: int | None = None,
 ):
+    """Non-recursive: all .h5 in one folder, output dirs named by file stem."""
     h5_files = sorted(root_dir.glob("*.h5"))
     if not h5_files:
         print(f"No .h5 files found in {root_dir}")
@@ -225,7 +193,6 @@ def process_directory_flat(
     print()
 
     for h5_file in h5_files:
-        # Use the file stem (minus .h5) as the output subdirectory
         file_out = out_root / h5_file.stem
         file_out.mkdir(parents=True, exist_ok=True)
         process_h5(

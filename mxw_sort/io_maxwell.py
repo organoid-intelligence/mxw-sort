@@ -3,25 +3,20 @@ import numpy as np
 import spikeinterface.core as sc
 
 
-# Resolves the recording group inside a Maxwell h5 file.
-# Handles both layouts:
-#   wells/well000/rec0000/...  (common in multi-well plates)
-#   wells/well000/...          (direct, less common)
 def _resolve_rec_group(f, stream_name):
+    """Handle both `wells/wellXXX/rec0000/...` and `wells/wellXXX/...` layouts."""
     well = f[f"wells/{stream_name}"]
-    # Check for rec0000 subgroup (typical multi-well layout)
     rec_keys = sorted(k for k in well.keys() if k.startswith("rec"))
     if rec_keys:
         return well[rec_keys[0]]
-    # Fall back to direct layout (settings/mapping lives directly under wellXXX)
     if "settings" in well:
         return well
     raise KeyError(f"Cannot find recording data under wells/{stream_name}")
 
 
-# Lazy SpikeInterface recording segment backed by an h5py dataset.
-# Handles both 2D (n_channels, n_samples) and 1D (n_total,) raw layouts.
 class _H5Segment(sc.BaseRecordingSegment):
+    """Lazy recording segment backed by an h5py dataset."""
+
     def __init__(self, raw_dataset, n_samples, sampling_frequency):
         super().__init__(sampling_frequency=sampling_frequency)
         self._raw = raw_dataset
@@ -35,10 +30,8 @@ class _H5Segment(sc.BaseRecordingSegment):
         start = start_frame or 0
         end = end_frame if end_frame is not None else self._n_samples
         if self._2d:
-            # Shape (n_channels, n_samples) → read columns, transpose to (n_frames, n_channels)
-            traces = self._raw[:, start:end].T
+            traces = self._raw[:, start:end].T  # (n_ch, n_samp) -> (n_samp, n_ch)
         else:
-            # Shape (n_total,) → interleaved, reshape to (n_frames, n_channels)
             n_ch = self._raw.shape[0] // self._n_samples
             traces = self._raw[start * n_ch : end * n_ch].reshape(-1, n_ch)
         if channel_indices is not None:
@@ -46,9 +39,9 @@ class _H5Segment(sc.BaseRecordingSegment):
         return traces
 
 
-# SpikeInterface BaseRecording backed by a Maxwell .raw.h5 file via h5py.
-# Bypasses Neo's channel-uniqueness check that fails on some Maxwell files.
 class MaxwellH5Recording(sc.BaseRecording):
+    """Bypasses Neo's channel-uniqueness check that fails on some Maxwell files."""
+
     def __init__(self, h5_path: str, stream_name: str):
         self._h5_file = h5py.File(h5_path, "r")
         rec_group = _resolve_rec_group(self._h5_file, stream_name)
@@ -57,7 +50,6 @@ class MaxwellH5Recording(sc.BaseRecording):
         fs = float(rec_group["settings/sampling"][()].item())
         raw = rec_group["groups/routed/raw"]
 
-        # Determine sample count from raw shape
         if raw.ndim == 2:
             n_channels_raw = raw.shape[0]
             n_samples = raw.shape[1]
@@ -65,13 +57,11 @@ class MaxwellH5Recording(sc.BaseRecording):
             n_channels_raw = mapping.shape[0]
             n_samples = raw.shape[0] // n_channels_raw
 
-        # Get positions for the active channels.
-        # The channels dataset contains channel IDs (matching mapping["channel"]),
-        # NOT array indices into the mapping. Look up by channel ID.
+        # channels dataset holds channel IDs (matching mapping["channel"]),
+        # not array indices — look up by channel ID
         channels_ds = rec_group["groups/routed"].get("channels")
         if channels_ds is not None:
             chan_ids = channels_ds[()].astype(int)
-            # Build lookup: channel ID → mapping row index
             chan_to_row = {int(m["channel"]): i for i, m in enumerate(mapping)}
             row_idx = np.array([chan_to_row[c] for c in chan_ids])
             xy = np.column_stack([
@@ -96,13 +86,11 @@ class MaxwellH5Recording(sc.BaseRecording):
             self._h5_file.close()
 
 
-# Reads maxwell recording from an H5 file, returns SpikeInterface recording object.
-# Uses h5py directly to avoid Neo's duplicate-channel-ID error.
 def read_maxwell(h5_path: str, stream_name: str):
+    """h5py reader that avoids Neo's duplicate-channel-ID error."""
     return MaxwellH5Recording(h5_path, stream_name)
 
 
-# Auto-detects available wells in a Maxwell H5 file, returns a tuple of well indices
 def get_available_wells(h5_path: str) -> tuple[int, ...]:
     try:
         with h5py.File(h5_path, "r") as f:
@@ -120,7 +108,6 @@ def get_available_wells(h5_path: str) -> tuple[int, ...]:
         return (0, 1, 2, 3, 4, 5)
 
 
-# Returns recording duration in seconds for a given well, reading only metadata.
 def get_well_duration_s(h5_path: str, stream_name: str) -> float:
     with h5py.File(h5_path, "r") as f:
         rec_group = _resolve_rec_group(f, stream_name)

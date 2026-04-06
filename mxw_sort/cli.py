@@ -1,7 +1,9 @@
 from pathlib import Path
+
 import typer
+
 from .config import PipelineConfig
-from .pipeline import process_h5, process_directory, process_directory_flat
+from .pipeline import process_directory, process_directory_flat, process_h5
 
 app = typer.Typer(add_completion=False)
 

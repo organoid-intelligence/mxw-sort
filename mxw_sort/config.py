@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 
+
 # Create frozen dataclass for parameters that affect processing results (for reproducibility (fingers crossed)).
 @dataclass(frozen=True)
 class PipelineConfig:
