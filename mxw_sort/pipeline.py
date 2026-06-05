@@ -4,16 +4,44 @@ from pathlib import Path
 import numpy as np
 import spikeinterface.preprocessing as spre
 
+from .artifacts import remove_stim_artifacts
 from .config import PipelineConfig
 from .export import write_binary, write_meta_json, write_probe_json
 from .io_maxwell import get_available_wells, get_well_duration_s, read_maxwell
 from .ks4 import run_ks4
 from .preprocess import bandpass_to_frac_nyq, slice_seconds
 from .qc import write_qc
+from .stim_times import resolve_stim_frames
+
+
+def build_artifact_step(frames_full, source, rec, start_frame, cfg):
+    """Map full-recording stim frames into the sliced coordinate, drop
+    out-of-range, and build a provenance dict. Returns (kept_frames, provenance)."""
+    n = rec.get_num_samples()
+    sliced = np.asarray(frames_full, dtype=np.int64) - int(start_frame)
+    kept = sliced[(sliced >= 0) & (sliced < n)]
+    prov = {
+        "enabled": True,
+        "mode": cfg.mode,
+        "source": source,
+        "n_stims_total": int(np.asarray(frames_full).size),
+        "n_stims_in_window": int(kept.size),
+        "n_stims_dropped_out_of_range": int(np.asarray(frames_full).size - kept.size),
+        "pre_ms": cfg.pre_ms,
+        "post_ms": cfg.post_ms,
+        "sat_flat_run": cfg.sat_flat_run,
+        "sat_max_ms": cfg.sat_max_ms,
+        "fit_M": cfg.fit_M,
+        "fit_eps": cfg.fit_eps,
+        "seed": cfg.seed,
+    }
+    return kept, prov
 
 
 def _ks4_done(ks_dir: Path) -> bool:
-    return (ks_dir / "spike_times.npy").exists() and (ks_dir / "spike_clusters.npy").exists()
+    return (ks_dir / "spike_times.npy").exists() and (
+        ks_dir / "spike_clusters.npy"
+    ).exists()
 
 
 def process_one_well(
@@ -63,7 +91,26 @@ def process_one_well(
 
     rec = read_maxwell(h5_path, stream)
     rec = spre.unsigned_to_signed(rec)
-    rec = slice_seconds(rec, cfg.start_s, cfg.dur_s)
+
+    artifact_prov = {"enabled": False}
+    if cfg.artifacts.enabled:
+        fs_full = rec.get_sampling_frequency()
+        start_frame = int(round(cfg.start_s * fs_full))
+        frames_full, source = resolve_stim_frames(h5_path, stream, rec, cfg.artifacts)
+        rec = slice_seconds(rec, cfg.start_s, cfg.dur_s)
+        kept, artifact_prov = build_artifact_step(
+            frames_full, source, rec, start_frame, cfg.artifacts
+        )
+        if kept.size:
+            rec = remove_stim_artifacts(rec, kept, cfg.artifacts)
+            print(
+                f"[STIM] {stream}: cleaned {kept.size} stims (source={source}, mode={cfg.artifacts.mode})"
+            )
+        else:
+            print(f"[STIM] {stream}: no stims to clean (source={source})")
+    else:
+        rec = slice_seconds(rec, cfg.start_s, cfg.dur_s)
+
     rec = bandpass_to_frac_nyq(rec, cfg.bp_min_hz, cfg.bp_max_frac_nyq)
 
     fs_hz = rec.get_sampling_frequency()
@@ -82,6 +129,7 @@ def process_one_well(
         "bp_min_hz": cfg.bp_min_hz,
         "bp_max_frac_nyq": cfg.bp_max_frac_nyq,
         "n_chan": int(xy.shape[0]),
+        "artifacts": artifact_prov,
     }
     write_meta_json(meta, meta_path)
 
@@ -95,7 +143,9 @@ def process_one_well(
         highpass_cutoff_hz=cfg.ks4_highpass_cutoff_hz,
     )
 
-    write_qc(ks_dir=ks_dir, qc_dir=qc_dir, fs_hz=float(fs_hz), dur_s_processed=cfg.dur_s)
+    write_qc(
+        ks_dir=ks_dir, qc_dir=qc_dir, fs_hz=float(fs_hz), dur_s_processed=cfg.dur_s
+    )
 
     elapsed = time.time() - t0
     print(f"[DONE] {stream} in {elapsed:.1f}s")

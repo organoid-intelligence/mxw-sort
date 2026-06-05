@@ -19,6 +19,9 @@ results/
 *.npy
 *.h5
 
+# Tests
+tests/
+
 # OS
 .DS_Store
 Thumbs.db

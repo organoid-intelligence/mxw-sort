@@ -55,6 +55,9 @@ mxw-sort run path/to/data.raw.h5 --out results/ --dry-run
 | `--only-well` | — | Process exactly one well index |
 | `--bp-min` | `300.0` | Bandpass filter minimum frequency (Hz) |
 | `--bp-max-frac-nyq` | `0.9` | Bandpass max as fraction of Nyquist |
+| `--remove-stim-artifacts / --no-remove-stim-artifacts` | `False` | Remove stimulation artifacts before the bandpass and sorting |
+| `--stim-artifact-mode` | `fit` | Correction mode: `fit` (subtract model) or `blank` (noise fill) |
+| `--stim-source` | `auto` | Stim-time source: `auto`, `events` (h5 log), or `detect` (from signal) |
 | `--ks4-highpass-cutoff` | `1.0` | KS4 highpass cutoff (`1.0` = disabled) |
 | `--ks4-batch-size` | `60000` | KS4 batch size |
 | `--skip-existing / --no-skip-existing` | `True` | Skip wells with existing KS4 outputs |
@@ -70,6 +73,19 @@ For each well in an `.h5` file:
 3. **Export** — Write binary traces + probe geometry JSON (for Kilosort)
 4. **Sort** — Run Kilosort4
 5. **QC** — Generate raster plot, spike position scatter, drift scatter, and a summary JSON
+
+When `--remove-stim-artifacts` is set, stimulation windows are cleaned during preprocessing, before the bandpass filter (see below).
+
+## Stimulation artifact removal
+
+Recordings that contain electrical stimulation carry a stimulus artifact that can seed false units and corrupt template estimation. Pass `--remove-stim-artifacts` to clean each stimulation window before the bandpass and Kilosort. The step is off by default; only the samples inside each stimulation window change, and everything else is byte-for-byte identical to a run without the flag.
+
+Stimulation times are read from the MaxWell events log when present, and otherwise detected from the signal; `--stim-source` forces one or the other. Two correction modes are available through `--stim-artifact-mode`:
+
+- `fit` (default): fits and subtracts the artifact (an exponential decay plus a cubic baseline), leaving spikes that ride the decay intact. Use this when you need spike responses close to the stimulus.
+- `blank`: replaces the artifact window with matched noise. Cheaper on recordings with very many stimulations.
+
+The mode, source, stimulation count, and window sizes are recorded in each well's `meta.json`.
 
 ## Output structure
 

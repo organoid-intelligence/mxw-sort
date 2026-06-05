@@ -53,6 +53,7 @@ dev = [
   "black",
   "ruff",
   "ipython",
+  "pytest",
 ]
 
 [tool.uv]
