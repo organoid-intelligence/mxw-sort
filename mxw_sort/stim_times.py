@@ -1,3 +1,5 @@
+import os
+
 import h5py
 import numpy as np
 
@@ -33,6 +35,25 @@ def load_stim_frames(h5_path: str, stream: str) -> np.ndarray | None:
     if fn_full is None:
         return onsets - f0
     return np.searchsorted(fn_full, onsets).astype(np.int64)
+
+
+def load_npz_stim_frames(h5_path: str, fs: float) -> np.ndarray | None:
+    """Stim onset sample indices from the `<stem>_metadata.npz` sidecar, or None if
+    absent. X_times are in seconds from recording start."""
+    npz_path = None
+    for suffix in (".raw.h5", ".h5"):
+        if h5_path.endswith(suffix):
+            npz_path = h5_path[: -len(suffix)] + "_metadata.npz"
+            break
+    if npz_path is None or not os.path.exists(npz_path):
+        return None
+    d = np.load(npz_path, allow_pickle=True)
+    if "X_times" not in d.files:
+        return None
+    xt = np.asarray(d["X_times"], dtype=np.float64).ravel()
+    if xt.size == 0:
+        return None
+    return np.round(xt * fs).astype(np.int64)
 
 
 def merge_windows(onsets, pre: int, post: int) -> list[tuple[int, int]]:
@@ -86,14 +107,20 @@ def detect_stim_frames(recording, cfg):
 
 
 def resolve_stim_frames(h5_path, stream, recording, cfg):
-    """Resolve stim onsets from the events log, falling back to blind detection.
-    Returns (frames, source); empty with source 'none' if neither finds any."""
+    """Resolve stim onsets from the events log, then the npz sidecar, then blind
+    detection. Returns (frames, source); empty with source 'none' if none apply."""
     if cfg.source in ("auto", "events"):
         fr = load_stim_frames(h5_path, stream)
         if fr is not None and len(fr):
             return fr, "events"
         if cfg.source == "events":
             return np.array([], dtype=np.int64), "events_none"
+    if cfg.source in ("auto", "npz"):
+        fr = load_npz_stim_frames(h5_path, recording.get_sampling_frequency())
+        if fr is not None and len(fr):
+            return fr, "npz"
+        if cfg.source == "npz":
+            return np.array([], dtype=np.int64), "npz_none"
     if cfg.source in ("auto", "detect"):
         fr = detect_stim_frames(recording, cfg)
         if len(fr):

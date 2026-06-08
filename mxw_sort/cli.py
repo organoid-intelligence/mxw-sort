@@ -59,7 +59,7 @@ def run(
         help="Artifact correction mode: fit (default) | blank",
     ),
     stim_source: str = typer.Option(
-        "auto", "--stim-source", help="Stim-time source: auto | events | detect"
+        "auto", "--stim-source", help="Stim-time source: auto | events | npz | detect"
     ),
     flat: bool = typer.Option(
         False,
